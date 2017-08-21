@@ -121,4 +121,7 @@ public class ContainerFabric extends MinecraftFabric {
         return slot.inventory != null && slot.inventory.getDisplayName() != null ? new FixedTranslation(slot.inventory.getDisplayName().getUnformattedText()) : new FixedTranslation("UNKNOWN: " + container.getClass().getName());
     }
 
+    public Container getContainer() {
+        return this.container;
+    }
 }
