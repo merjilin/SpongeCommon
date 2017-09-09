@@ -45,15 +45,22 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import javax.annotation.Nullable;
+
 @Mixin(value = WorldServer.class)
 public abstract class MixinWorldServer_Async_Lighting extends MixinWorld implements IMixinWorldServer {
 
-    private ExecutorService lightExecutorService =
-            Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setNameFormat("Sponge - Async Light Thread").build());
+    private static final int NUM_XZ_BITS = 4;
+    private static final int NUM_SHORT_Y_BITS = 8;
+    private static final short XZ_MASK = 0xF;
+    private static final short Y_SHORT_MASK = 0xFF;
+
+    private ExecutorService lightExecutorService = 
+                Executors.newFixedThreadPool(SpongeImpl.getGlobalConfig().getConfig().getOptimizations().getAsyncLightingCategory().getNumThreads(), new ThreadFactoryBuilder().setNameFormat("Sponge - Async Light Thread").build());
 
     @Override
     public boolean checkLightFor(EnumSkyBlock lightType, BlockPos pos) {
-        return this.updateLightAsync(lightType, pos);
+        return this.updateLightAsync(lightType, pos, null);
     }
 
     @Override
@@ -90,9 +97,9 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
                         this.setLightForAsync(lightType, blockpos, 0, currentChunk, neighbors); // Sponge - use thread safe method
 
                         if (l2 > 0) {
-                            int j3 = MathHelper.abs_int(i2 - i1);
-                            int k3 = MathHelper.abs_int(j2 - j1);
-                            int l3 = MathHelper.abs_int(k2 - k1);
+                            int j3 = MathHelper.abs(i2 - i1);
+                            int k3 = MathHelper.abs(j2 - j1);
+                            int l3 = MathHelper.abs(k2 - k1);
 
                             if (j3 + k3 + l3 < 17) {
                                 BlockPos.PooledMutableBlockPos blockpos$pooledmutableblockpos = BlockPos.PooledMutableBlockPos.retain();
@@ -178,13 +185,13 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
             }
 
             // Sponge start - Asynchronous light updates
-            if (SpongeImpl.getGlobalConfig().getConfig().getOptimizations().useAsyncLighting()) {
-                spongeChunk.getPendingLightUpdates().decrementAndGet();
-                for (net.minecraft.world.chunk.Chunk neighborChunk : neighbors) {
-                    final IMixinChunk neighbor = (IMixinChunk) neighborChunk;
-                    neighbor.getPendingLightUpdates().decrementAndGet();
-                }
+            spongeChunk.getQueuedLightingUpdates(lightType).remove((Short) this.blockPosToShort(pos));
+            spongeChunk.getPendingLightUpdates().decrementAndGet();
+            for (net.minecraft.world.chunk.Chunk neighborChunk : neighbors) {
+                final IMixinChunk neighbor = (IMixinChunk) neighborChunk;
+                neighbor.getPendingLightUpdates().decrementAndGet();
             }
+
             // Sponge end
             //this.theProfiler.endSection(); // Sponge - don't use profiler off of main thread
             return true;
@@ -192,18 +199,27 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
     }
 
     @Override
-    public boolean updateLightAsync(EnumSkyBlock lightType, BlockPos pos) {
+    public boolean updateLightAsync(EnumSkyBlock lightType, BlockPos pos, @Nullable Chunk currentChunk) {
         if (this.getMinecraftServer().isServerStopped() || this.lightExecutorService.isShutdown()) {
             return false;
         }
 
-        final net.minecraft.world.chunk.Chunk chunk =
-                ((IMixinChunkProviderServer) this.getChunkProvider()).getLoadedChunkWithoutMarkingActive(pos.getX() >> 4, pos.getZ() >> 4);
-        IMixinChunk spongeChunk = (IMixinChunk) chunk;
-        if (chunk == null || chunk.unloaded || !spongeChunk.areNeighborsLoaded()) {
+        if (currentChunk == null) {
+            currentChunk = ((IMixinChunkProviderServer) this.chunkProvider).getLoadedChunkWithoutMarkingActive(pos.getX() >> 4, pos.getZ() >> 4);
+        }
+
+        final IMixinChunk spongeChunk = (IMixinChunk) currentChunk;
+        if (currentChunk == null || currentChunk.unloadQueued || !spongeChunk.areNeighborsLoaded()) {
             return false;
         }
 
+        final short shortPos = this.blockPosToShort(pos);
+        if (spongeChunk.getQueuedLightingUpdates(lightType).contains(shortPos)) {
+            return false;
+        }
+
+        final Chunk chunk = currentChunk;
+        spongeChunk.getQueuedLightingUpdates(lightType).add(shortPos);
         spongeChunk.getPendingLightUpdates().incrementAndGet();
         spongeChunk.setLightUpdateTime(chunk.getWorld().getTotalWorldTime());
 
@@ -232,9 +248,14 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
             neighbor.setLightUpdateTime(chunk.getWorld().getTotalWorldTime());
         }
 
-        this.lightExecutorService.execute(() -> {
+        //System.out.println("size = " + ((ThreadPoolExecutor) this.lightExecutorService).getQueue().size());
+        if (SpongeImpl.getServer().isCallingFromMinecraftThread()) {
+            this.lightExecutorService.execute(() -> {
+                this.checkLightAsync(lightType, pos, chunk, neighbors);
+            });
+        } else {
             this.checkLightAsync(lightType, pos, chunk, neighbors);
-        });
+        }
 
         return true;
     }
@@ -248,14 +269,14 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
     // Each method avoids calling getLoadedChunk and instead accesses the passed neighbor chunk list to avoid concurrency issues
     public Chunk getLightChunk(BlockPos pos, Chunk currentChunk, List<Chunk> neighbors) {
         if (currentChunk.isAtLocation(pos.getX() >> 4, pos.getZ() >> 4)) {
-            if (currentChunk.unloaded) {
+            if (currentChunk.unloadQueued) {
                 return null;
             }
             return currentChunk;
         }
         for (net.minecraft.world.chunk.Chunk neighbor : neighbors) {
             if (neighbor.isAtLocation(pos.getX() >> 4, pos.getZ() >> 4)) {
-                if (neighbor.unloaded) {
+                if (neighbor.unloadQueued) {
                     return null;
                 }
                 return neighbor;
@@ -274,7 +295,7 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
         }
 
         final Chunk chunk = this.getLightChunk(pos, currentChunk, neighbors);
-        if (chunk == null || chunk.unloaded) {
+        if (chunk == null || chunk.unloadQueued) {
             return lightType.defaultLightValue;
         }
 
@@ -283,7 +304,7 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
 
     private int getRawBlockLightAsync(EnumSkyBlock lightType, BlockPos pos, Chunk currentChunk, List<Chunk> neighbors) {
         final Chunk chunk = getLightChunk(pos, currentChunk, neighbors);
-        if (chunk == null || chunk.unloaded) {
+        if (chunk == null || chunk.unloadQueued) {
             return lightType.defaultLightValue;
         }
         if (lightType == EnumSkyBlock.SKY && chunk.canSeeSky(pos)) {
@@ -328,10 +349,30 @@ public abstract class MixinWorldServer_Async_Lighting extends MixinWorld impleme
     public void setLightForAsync(EnumSkyBlock type, BlockPos pos, int lightValue, Chunk currentChunk, List<Chunk> neighbors) {
         if (((IMixinBlockPos) pos).isValidPosition()) {
             final Chunk chunk = this.getLightChunk(pos, currentChunk, neighbors);
-            if (chunk != null && !chunk.unloaded) {
+            if (chunk != null && !chunk.unloadQueued) {
                 chunk.setLightFor(type, pos, lightValue);
                 this.notifyLightSet(pos);
             }
         }
+    }
+
+    private short blockPosToShort(BlockPos pos) {
+        short serialized = (short) setNibble(0, pos.getX() & XZ_MASK, 0, NUM_XZ_BITS);
+        serialized = (short) setNibble(serialized, pos.getY() & Y_SHORT_MASK, 1, NUM_SHORT_Y_BITS);
+        serialized = (short) setNibble(serialized, pos.getZ() & XZ_MASK, 3, NUM_XZ_BITS);
+        return serialized;
+    }
+
+    /**
+     * Modifies bits in an integer.
+     *
+     * @param num Integer to modify
+     * @param data Bits of data to add
+     * @param which Index of nibble to start at
+     * @param bitsToReplace The number of bits to replace starting from nibble index
+     * @return The modified integer
+     */
+    private int setNibble(int num, int data, int which, int bitsToReplace) {
+        return (num & ~(bitsToReplace << (which * 4)) | (data << (which * 4)));
     }
 }
