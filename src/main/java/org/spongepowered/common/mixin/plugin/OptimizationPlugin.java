@@ -91,14 +91,12 @@ public class OptimizationPlugin implements IMixinConfigPlugin {
                     (module) -> true) // TODO the velocity changes need to be sent to the client
             .put("org.spongepowered.common.mixin.optimization.MixinSpongeImplHooks_Explosion",
                     (module) -> true)
+            .put("org.spongepowered.common.mixin.optimization.block.MixinBlockRedstoneWire",
+                    OptimizationCategory::usePandaRedstone)
             .put("org.spongepowered.common.mixin.optimization.entity.MixinEntityTameable_Cached_Owner",
                     OptimizationCategory::useCacheTameableOwners)
             .put("org.spongepowered.common.mixin.optimization.world.MixinChunk_Async_Lighting",
                     OptimizationCategory::useAsyncLighting)
-            .put("org.spongepowered.common.mixin.optimization.world.MixinChunk_TileEntity_Unload",
-                    OptimizationCategory::useTileEntityUnload)
-            .put("org.spongepowered.common.mixin.optimization.world.MixinWorld_TileEntity_Unload",
-                    OptimizationCategory::useTileEntityUnload)
             .put("org.spongepowered.common.mixin.optimization.world.MixinWorldServer_Async_Lighting",
                     OptimizationCategory::useAsyncLighting)
             .put("org.spongepowered.common.mixin.optimization.world.gen.MixinChunkProviderServer_Async_Lighting",
