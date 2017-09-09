@@ -24,11 +24,8 @@
  */
 package org.spongepowered.common.config.category;
 
-import net.minecraft.launchwrapper.Launch;
 import ninja.leaping.configurate.objectmapping.Setting;
 import ninja.leaping.configurate.objectmapping.serialize.ConfigSerializable;
-
-import java.io.IOException;
 
 @ConfigSerializable
 public class OptimizationCategory extends ConfigCategory {
@@ -41,7 +38,7 @@ public class OptimizationCategory extends ConfigCategory {
                                                     + "without being merged.";
 
     @Setting(value = "drops-pre-merge", comment = PRE_MERGE_COMMENT)
-    private boolean preItemDropMerge;
+    private boolean preItemDropMerge = true;
 
     @Setting(value = "cache-tameable-owners", comment = "Caches tameable entities owners to avoid constant lookups against data watchers. If mods cause issue, disable.")
     private boolean cacheTameableOwners = true;
@@ -49,26 +46,17 @@ public class OptimizationCategory extends ConfigCategory {
     @Setting(value = "structure-saving", comment = "Handles structures that are saved to disk. Certain structures can take up large amounts\n"
             + "of disk space for very large maps and the data for these structures is only needed while the world\n"
             + "around them is generating. Disabling saving of these structures can save disk space and time during\n"
-            + "saves if your world is already fully generated.")
+            + "saves if your world is already fully generated.\n"
+            + "Warning: disabling structure saving will break the vanilla locate command.")
     private StructureSaveCategory structureSaveCategory = new StructureSaveCategory();
 
     @Setting(value = "async-lighting", comment = "Runs lighting updates async.")
-    private boolean asyncLighting = true;
+    private AsyncLightingCategory asyncLightingCategory = new AsyncLightingCategory();
 
-    @Setting(value = "tile-entity-unload", comment = "If enabled, uses Forge's 1.12 TE unload patch to fix MC-117075.\n"
-            + "See https://github.com/MinecraftForge/MinecraftForge/pull/4281 for more info.\n"
-            + "Note: This may cause issues with some mods so backup before enabling.")
-    private boolean tileEntityUnload = false;
-
-    public OptimizationCategory() {
-        try {
-            // Enabled ny default on SpongeVanilla, disabled by default on SpongeForge.
-            // Because of how early this constructor gets called, we can't use SpongeImplHooks or even Game
-            this.preItemDropMerge = Launch.classLoader.getClassBytes("net.minecraftforge.common.ForgeVersion") == null;
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+    @Setting(value = "panda-redstone", comment = "If enabled, uses Panda4494's Redstone implementation which improves performance.\n"
+            + "See https://bugs.mojang.com/browse/MC-11193 for more information.\n"
+            + "Note: This optimization has a few issues which is explained in the bug report. We are not responsible for any issues this may cause.")
+    private boolean pandaRedstone = false;
 
     public StructureSaveCategory getStructureSaveCategory() {
         return this.structureSaveCategory;
@@ -86,11 +74,15 @@ public class OptimizationCategory extends ConfigCategory {
         return this.cacheTameableOwners;
     }
 
-    public boolean useAsyncLighting() {
-        return this.asyncLighting;
+    public AsyncLightingCategory getAsyncLightingCategory() {
+        return this.asyncLightingCategory;
     }
 
-    public boolean useTileEntityUnload() {
-        return this.tileEntityUnload;
+    public boolean useAsyncLighting() {
+        return this.asyncLightingCategory.isEnabled();
+    }
+
+    public boolean usePandaRedstone() {
+        return this.pandaRedstone;
     }
 }
